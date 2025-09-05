@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -64,14 +65,38 @@ func (s *Scheduler) AddJob(spec string, job Job) error {
 	return nil
 }
 
+// jobWrapper wraps a job with a different name
+type jobWrapper struct {
+	originalJob Job
+	name        string
+}
+
+func (w *jobWrapper) Name() string {
+	return w.name
+}
+
+func (w *jobWrapper) Run(ctx context.Context) error {
+	return w.originalJob.Run(ctx)
+}
+
 // AddMorningEveningJob adds a job that runs at 10am and 5pm every day
 func (s *Scheduler) AddMorningEveningJob(job Job) error {
 	// 10am every day: 0 0 10 * * *
 	// 5pm every day: 0 0 17 * * *
+
+	// Add morning job with original name
 	if err := s.AddJob("0 0 10 * * *", job); err != nil {
 		return err
 	}
-	return s.AddJob("0 0 17 * * *", job)
+
+	// Create a wrapper for the evening job with a different name
+	eveningJob := &jobWrapper{
+		originalJob: job,
+		name:        job.Name() + "_evening",
+	}
+
+	// Add evening job with the wrapper
+	return s.AddJob("0 0 17 * * *", eveningJob)
 }
 
 // Start starts the scheduler
@@ -99,7 +124,18 @@ func (s *Scheduler) Stop() {
 func (s *Scheduler) RunJobNow(name string) error {
 	job, exists := s.jobs[name]
 	if !exists {
-		return fmt.Errorf("job %s not registered", name)
+		// Check if this is an evening job name
+		if strings.HasSuffix(name, "_evening") {
+			baseName := strings.TrimSuffix(name, "_evening")
+			if baseJob, baseExists := s.jobs[baseName]; baseExists {
+				// Use the base job instead
+				job = baseJob
+			} else {
+				return fmt.Errorf("job %s not registered", name)
+			}
+		} else {
+			return fmt.Errorf("job %s not registered", name)
+		}
 	}
 
 	log.Printf("Manually running job: %s", name)
